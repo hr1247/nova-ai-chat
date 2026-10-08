@@ -8,10 +8,22 @@ const INITIAL_MESSAGE = {
   content: "Hello! I'm **Nova**, your AI assistant. How can I help you today?"
 };
 
+const GROQ_MODELS = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'mixtral-8x7b-32768'
+];
+
 function App() {
+  const groqApiKey = import.meta.env.VITE_GROQ_API_KEY;
+
   // Model management state
-  const [availableModels, setAvailableModels] = useState([]);
-  const [selectedModel, setSelectedModel] = useState('mistral');
+  const [availableModels, setAvailableModels] = useState(
+    groqApiKey ? GROQ_MODELS : ['mistral']
+  );
+  const [selectedModel, setSelectedModel] = useState(
+    groqApiKey ? GROQ_MODELS[0] : 'mistral'
+  );
 
   // Load saved sessions from localStorage
   const [sessions, setSessions] = useState(() => {
@@ -37,8 +49,10 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const messagesEndRef = useRef(null);
 
-  // Fetch downloaded models from local Ollama instance on startup
+  // Fetch downloaded models from local Ollama instance on startup IF no Groq key exists
   useEffect(() => {
+    if (groqApiKey) return;
+
     const fetchModels = async () => {
       try {
         const res = await fetch('http://localhost:11434/api/tags');
@@ -55,7 +69,7 @@ function App() {
       }
     };
     fetchModels();
-  }, []);
+  }, [groqApiKey]);
 
   // Save/update sessions in localStorage whenever messages change
   useEffect(() => {
@@ -132,57 +146,115 @@ function App() {
     setIsLoading(true);
 
     try {
-      const response = await fetch('http://localhost:11434/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: [
-            ...messages.map((m) => ({ role: m.role, content: m.content })),
-            { role: 'user', content: userMessage }
-          ],
-          stream: true,
-        }),
-      });
+      if (groqApiKey) {
+        // --- GROQ API REQUEST ---
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${groqApiKey}`
+          },
+          body: JSON.stringify({
+            model: selectedModel,
+            messages: [
+              ...messages.map((m) => ({ role: m.role, content: m.content })),
+              { role: 'user', content: userMessage }
+            ],
+            stream: true,
+          }),
+        });
 
-      if (!response.ok) throw new Error('Failed to connect to Ollama server.');
+        if (!response.ok) throw new Error('Failed to connect to Groq Cloud API.');
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulatedText = '';
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedText = '';
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
 
-        for (const line of lines) {
-          if (line.trim() !== '') {
-            const parsed = JSON.parse(line);
-            if (parsed.message?.content) {
-              accumulatedText += parsed.message.content;
-              
-              setMessages((prev) => {
-                const newHistory = [...prev];
-                newHistory[newHistory.length - 1] = {
-                  role: 'assistant',
-                  content: accumulatedText,
-                };
-                return newHistory;
-              });
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const parsed = JSON.parse(line.replace('data: ', ''));
+                const content = parsed.choices[0]?.delta?.content;
+                if (content) {
+                  accumulatedText += content;
+                  setMessages((prev) => {
+                    const newHistory = [...prev];
+                    newHistory[newHistory.length - 1] = {
+                      role: 'assistant',
+                      content: accumulatedText,
+                    };
+                    return newHistory;
+                  });
+                }
+              } catch (e) {
+                // Ignore parse errors for incomplete chunks
+              }
+            }
+          }
+        }
+      } else {
+        // --- LOCAL OLLAMA REQUEST ---
+        const response = await fetch('http://localhost:11434/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: selectedModel,
+            messages: [
+              ...messages.map((m) => ({ role: m.role, content: m.content })),
+              { role: 'user', content: userMessage }
+            ],
+            stream: true,
+          }),
+        });
+
+        if (!response.ok) throw new Error('Failed to connect to Ollama server.');
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedText = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.trim() !== '') {
+              const parsed = JSON.parse(line);
+              if (parsed.message?.content) {
+                accumulatedText += parsed.message.content;
+                
+                setMessages((prev) => {
+                  const newHistory = [...prev];
+                  newHistory[newHistory.length - 1] = {
+                    role: 'assistant',
+                    content: accumulatedText,
+                  };
+                  return newHistory;
+                });
+              }
             }
           }
         }
       }
     } catch (error) {
-      console.error('Error connecting to Ollama:', error);
+      console.error('Error during chat request:', error);
       setMessages((prev) => {
         const newHistory = [...prev];
         newHistory[newHistory.length - 1] = {
           role: 'assistant',
-          content: '⚠️ **Error:** Could not connect to local Ollama server. Make sure Ollama is running.',
+          content: groqApiKey
+            ? '⚠️ **Error:** Could not connect to Groq API. Please check your API key in Vercel settings.'
+            : '⚠️ **Error:** Could not connect to local Ollama server. Make sure Ollama is running.',
         };
         return newHistory;
       });
@@ -261,7 +333,9 @@ function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-wide">Nova AI</h1>
-              <p className="text-xs text-emerald-400 font-medium">Running Locally</p>
+              <p className="text-xs text-emerald-400 font-medium">
+                {groqApiKey ? 'Powered by Groq Cloud' : 'Running Locally (Ollama)'}
+              </p>
             </div>
           </div>
 
@@ -273,17 +347,11 @@ function App() {
               onChange={(e) => setSelectedModel(e.target.value)}
               className="bg-transparent text-xs text-slate-200 font-medium focus:outline-none cursor-pointer"
             >
-              {availableModels.length > 0 ? (
-                availableModels.map((model) => (
-                  <option key={model} value={model} className="bg-slate-800 text-slate-200">
-                    {model}
-                  </option>
-                ))
-              ) : (
-                <option value={selectedModel} className="bg-slate-800 text-slate-200">
-                  {selectedModel}
+              {availableModels.map((model) => (
+                <option key={model} value={model} className="bg-slate-800 text-slate-200">
+                  {model}
                 </option>
-              )}
+              ))}
             </select>
           </div>
         </header>
@@ -379,7 +447,9 @@ function App() {
             </button>
           </form>
           <p className="text-center text-xs text-slate-500 mt-2">
-            Powered by Ollama & {selectedModel}. Completely local and private.
+            {groqApiKey
+              ? `Powered by Groq Cloud & ${selectedModel}. High-speed global inference.`
+              : `Powered by Ollama & ${selectedModel}. Completely local and private.`}
           </p>
         </div>
       </div>
