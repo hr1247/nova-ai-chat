@@ -8,23 +8,11 @@ const INITIAL_MESSAGE = {
   content: "Hello! I'm **Nova**, your AI assistant. How can I help you today?"
 };
 
-const GROQ_MODELS = [
-  'llama-3.3-70b-versatile',
-  'llama-3.1-8b-instant',
-  'gemma2-9b-it',
-  'deepseek-r1-distill-llama-70b'
-];
-
 function App() {
   const groqApiKey = import.meta.env.VITE_GROQ_API_KEY;
 
-  // Model management state
-  const [availableModels, setAvailableModels] = useState(
-    groqApiKey ? GROQ_MODELS : ['mistral']
-  );
-  const [selectedModel, setSelectedModel] = useState(
-    groqApiKey ? GROQ_MODELS[0] : 'mistral'
-  );
+  const [availableModels, setAvailableModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
 
   // Load saved sessions from localStorage
   const [sessions, setSessions] = useState(() => {
@@ -39,46 +27,63 @@ function App() {
     return [];
   });
 
-  // Current active chat session ID
   const [currentSessionId, setCurrentSessionId] = useState(() => Date.now());
-  
-  // Messages for the current active chat session
   const [messages, setMessages] = useState([INITIAL_MESSAGE]);
-  
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const messagesEndRef = useRef(null);
 
-  // Fetch downloaded models from local Ollama instance on startup IF no Groq key exists
+  // Dynamic model fetch for both Groq Cloud and local Ollama
   useEffect(() => {
-    if (groqApiKey) return;
-
-    const fetchModels = async () => {
-      try {
-        const res = await fetch('http://localhost:11434/api/tags');
-        if (res.ok) {
-          const data = await res.json();
-          const modelList = data.models.map((m) => m.name);
-          setAvailableModels(modelList);
-          if (modelList.length > 0 && !modelList.includes(selectedModel)) {
-            setSelectedModel(modelList[0]);
+    const fetchActiveModels = async () => {
+      if (groqApiKey) {
+        try {
+          const res = await fetch('https://api.groq.com/openai/v1/models', {
+            headers: {
+              'Authorization': `Bearer ${groqApiKey}`
+            }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            // Filter text generation chat models
+            const models = data.data
+              .map((m) => m.id)
+              .filter((id) => !id.includes('whisper') && !id.includes('safetensors'));
+            if (models.length > 0) {
+              setAvailableModels(models);
+              setSelectedModel(models[0]);
+            }
           }
+        } catch (err) {
+          console.error('Could not fetch Groq models dynamically:', err);
         }
-      } catch (err) {
-        console.error('Could not fetch local Ollama models:', err);
+      } else {
+        try {
+          const res = await fetch('http://localhost:11434/api/tags');
+          if (res.ok) {
+            const data = await res.json();
+            const modelList = data.models.map((m) => m.name);
+            setAvailableModels(modelList);
+            if (modelList.length > 0) {
+              setSelectedModel(modelList[0]);
+            }
+          }
+        } catch (err) {
+          console.error('Could not fetch local Ollama models:', err);
+        }
       }
     };
-    fetchModels();
+
+    fetchActiveModels();
   }, [groqApiKey]);
 
-  // Save/update sessions in localStorage whenever messages change
+  // Save/update sessions in localStorage
   useEffect(() => {
     if (messages.length <= 1) return;
 
     setSessions((prevSessions) => {
       const existingIndex = prevSessions.findIndex((s) => s.id === currentSessionId);
-      
       const firstUserMsg = messages.find((m) => m.role === 'user');
       const title = firstUserMsg ? firstUserMsg.content.slice(0, 30) + '...' : 'New Chat';
 
@@ -268,7 +273,7 @@ function App() {
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-100 font-sans overflow-hidden">
-      {/* Sidebar for Past Chat History */}
+      {/* Sidebar */}
       <aside
         className={`${
           sidebarOpen ? 'w-64' : 'w-0'
@@ -284,7 +289,6 @@ function App() {
           </button>
         </div>
 
-        {/* History List */}
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-2 py-1">
             Chat History
@@ -342,13 +346,13 @@ function App() {
             </div>
           </div>
 
-          {/* Model Switcher Dropdown */}
+          {/* Dynamic Model Switcher */}
           <div className="flex items-center space-x-2 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-700">
             <Cpu className="w-4 h-4 text-emerald-400" />
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="bg-transparent text-xs text-slate-200 font-medium focus:outline-none cursor-pointer"
+              className="bg-transparent text-xs text-slate-200 font-medium focus:outline-none cursor-pointer max-w-[200px]"
             >
               {availableModels.map((model) => (
                 <option key={model} value={model} className="bg-slate-800 text-slate-200">
