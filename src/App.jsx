@@ -46,13 +46,22 @@ function App() {
           });
           if (res.ok) {
             const data = await res.json();
-            // Filter text generation chat models
+            // Filter out whisper, guard, and non-chat streaming classification models
             const models = data.data
               .map((m) => m.id)
-              .filter((id) => !id.includes('whisper') && !id.includes('safetensors'));
+              .filter((id) => 
+                !id.includes('whisper') && 
+                !id.includes('guard') && 
+                !id.includes('safetensors') &&
+                !id.includes('orpheus') &&
+                !id.includes('tts')
+              );
+
             if (models.length > 0) {
               setAvailableModels(models);
-              setSelectedModel(models[0]);
+              // Default to a common Llama model if available, otherwise pick the first valid model
+              const preferredDefault = models.find((m) => m.includes('llama-3.1-8b') || m.includes('llama-3.3-70b')) || models[0];
+              setSelectedModel(preferredDefault);
             }
           }
         } catch (err) {
@@ -78,7 +87,7 @@ function App() {
     fetchActiveModels();
   }, [groqApiKey]);
 
-  // Save/update sessions in localStorage
+  // Save/update sessions in localStorage whenever messages change
   useEffect(() => {
     if (messages.length <= 1) return;
 
