@@ -164,7 +164,11 @@ function App() {
           }),
         });
 
-        if (!response.ok) throw new Error('Failed to connect to Groq Cloud API.');
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          const detailMsg = errorData.error?.message || `HTTP ${response.status} Error`;
+          throw new Error(`Groq API Error: ${detailMsg}`);
+        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -214,7 +218,7 @@ function App() {
           }),
         });
 
-        if (!response.ok) throw new Error('Failed to connect to Ollama server.');
+        if (!response.ok) throw new Error('Could not connect to local Ollama server.');
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -252,9 +256,7 @@ function App() {
         const newHistory = [...prev];
         newHistory[newHistory.length - 1] = {
           role: 'assistant',
-          content: groqApiKey
-            ? '⚠️ **Error:** Could not connect to Groq API. Please check your API key in Vercel settings.'
-            : '⚠️ **Error:** Could not connect to local Ollama server. Make sure Ollama is running.',
+          content: `⚠️ **Error:** ${error.message}`,
         };
         return newHistory;
       });
